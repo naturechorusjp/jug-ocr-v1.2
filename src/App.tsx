@@ -388,7 +388,7 @@ export default function App() {
                 step={100}
                 min={0}
                 compact
-                inputWidthCh={24}            {/* ← 幅を拡大 */}
+                inputWidthCh={10}
                 // 左に−1000、右に＋1000
                 extraLeft={[{ label: "−1000", delta: -1000 }]}
                 extraRight={[{ label: "+1000", delta: 1000 }]}
@@ -782,4 +782,3 @@ function parseFromText(raw: string) {
   if (G == null && big == null && reg == null && diff == null) return null;
   return { modelKey, G, big, reg, diff };
 }
-
