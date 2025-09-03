@@ -3,7 +3,7 @@ import Tesseract from "tesseract.js";
 
 // 機種プリセット（※数値：SアイムジャグラーEXをコピペしたものをベース）
 const PRESETS = {
-    "マイジャグラーV": {
+  "マイジャグラーV": {
     replay: 7.298, cherry: 36, bell: 1024, piero: 1024,
     bigAvg: 239.25, regAvg: 95.25, cherryPay: 2, bellPay: 14, pieroPay: 10,
   },
@@ -29,15 +29,16 @@ const PRESETS = {
   },
 } as const;
 
-// === 永続化（保存するのは G / BIG / REG / 差枚 / 機種プリセット ） ===
+// === 永続化（保存するのは G / BIG / REG / 差枚 / 機種プリセット / 履歴 ） ===
 const STORAGE_KEY = "jug-ocr-v1.2:state";
 
 function loadSaved() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
+    const obj = raw ? JSON.parse(raw) : {};
+    return { ...obj, history: obj.history ?? [] };
   } catch {
-    return {};
+    return { history: [] };
   }
 }
 
@@ -50,32 +51,27 @@ function saveState(partial: any) {
   }
 }
 
+// 履歴1件の型
+type HistoryRow = {
+  ts: number; // 追加時刻（今は表示しないが保存しておく）
+  model: string;
+  probs: {
+    random: string;
+    cherry90: string;
+    cherry100: string;
+    full: string;
+  };
+};
+
+const HISTORY_MAX = 10;
 
 // 打法ごとの小役取得率（必要なら後で調整可能）
 const STRATEGIES = [
-  {
-    key: "random",
-    label: "適当打ち",
-    capture: { cherry: 0.667, bell: 0.1, piero: 0.05 }, // 例：66.7％獲得
-  },
-  {
-    key: "cherry90",
-    label: "チェリー狙い(90%)",
-    capture: { cherry: 0.90, bell: 0.05, piero: 0.01 },
-  },
-  {
-    key: "cherry100",
-    label: "チェリー狙い(100%)",
-    capture: { cherry: 1.00, bell: 0, piero: 0 },
-  },
-  {
-    key: "full",
-    label: "完全攻略",
-    capture: { cherry: 1.00, bell: 1.00, piero: 1.00 },
-  },
+  { key: "random",    label: "適当打ち",           capture: { cherry: 0.667, bell: 0.1,  piero: 0.05 } },
+  { key: "cherry90",  label: "チェリー狙い(90%)",  capture: { cherry: 0.90,  bell: 0.05, piero: 0.01 } },
+  { key: "cherry100", label: "チェリー狙い(100%)", capture: { cherry: 1.00,  bell: 0,    piero: 0    } },
+  { key: "full",      label: "完全攻略",           capture: { cherry: 1.00,  bell: 1.00, piero: 1.00 } },
 ] as const;
-
-
 
 // 文字列→数値（カンマOK）
 function numberOr(val: any, fallback: number) {
@@ -93,24 +89,23 @@ export default function App() {
   const [presets] = useState(PRESETS);
   const p = presets[modelKey];
 
-  // ★ 入力欄を復元（未保存ならデフォルト値）
-  const [G, setG]   = useState<string | number>(() => {
+  // ★ 入力欄を復元（未保存ならブランク）
+  const [G, setG] = useState<string | number>(() => {
     const s = loadSaved();
-    return s.G ?? 3000;
+    return s.G ?? "";
   });
   const [big, setBig] = useState<string | number>(() => {
     const s = loadSaved();
-    return s.big ?? 10;
+    return s.big ?? "";
   });
   const [reg, setReg] = useState<string | number>(() => {
     const s = loadSaved();
-    return s.reg ?? 10;
+    return s.reg ?? "";
   });
   const [diff, setDiff] = useState<string | number>(() => {
     const s = loadSaved();
-    return s.diff ?? 0;
+    return s.diff ?? "";
   });
-
 
   // 前提（編集可）
   const [replay, setReplay] = useState<number>(p.replay);
@@ -127,13 +122,20 @@ export default function App() {
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrLog, setOcrLog] = useState("");
 
+  // 履歴（localStorage から復元）
+  const [history, setHistory] = useState<HistoryRow[]>(() => {
+    const s = loadSaved();
+    return Array.isArray(s.history) ? s.history : [];
+  });
 
-   // ← ★ 
-    useEffect(() => {
-    // G / BIG / REG / 差枚 / 機種プリセット を保存
+  // 入力・機種・履歴の永続化
+  useEffect(() => {
     saveState({ modelKey, G, big, reg, diff });
   }, [modelKey, G, big, reg, diff]);
 
+  useEffect(() => {
+    saveState({ history });
+  }, [history]);
 
   // カメラ/ファイル選択のための refs
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -143,9 +145,31 @@ export default function App() {
   function loadPreset(key: keyof typeof PRESETS) {
     setModelKey(key);
     const np = PRESETS[key];
-    setReplay(np.replay); setCherry(np.cherry); setBell(np.bell); setPiero(np.piero);
-    setBigAvg(np.bigAvg); setRegAvg(np.regAvg); setCherryPay(np.cherryPay);
-    setBellPay(np.bellPay); setPieroPay(np.pieroPay);
+
+    // 前提値を更新
+    setReplay(np.replay);
+    setCherry(np.cherry);
+    setBell(np.bell);
+    setPiero(np.piero);
+    setBigAvg(np.bigAvg);
+    setRegAvg(np.regAvg);
+    setCherryPay(np.cherryPay);
+    setBellPay(np.bellPay);
+    setPieroPay(np.pieroPay);
+
+    // ★ 入力フォームをクリア
+    setG("");
+    setBig("");
+    setReg("");
+    setDiff("");
+  }
+
+  // 入力だけリセット（履歴は残す）
+  function resetInputs() {
+    setG("");
+    setBig("");
+    setReg("");
+    setDiff("");
   }
 
   // 画像 → OCR → 自動入力
@@ -156,7 +180,7 @@ export default function App() {
       const file = files[0];
       setOcrLog(s => s + `読み取り開始: ${file.name}\n`);
       const { data } = await Tesseract.recognize(file, "jpn+eng", {
-        logger: m => { if (m.status) setOcrLog(s => s + `${m.status} ${Math.round((m.progress ?? 0)*100)}%\n`); }
+        logger: m => { if (m.status) setOcrLog(s => s + `${m.status} ${Math.round((m.progress ?? 0) * 100)}%\n`); }
       });
       const text = (data.text || "").trim();
       setOcrLog(s => s + "\n--- 抽出テキスト ---\n" + text + "\n-------------------\n");
@@ -184,168 +208,252 @@ export default function App() {
     handleImageFiles(e.dataTransfer.files);
   }
 
-  // App の中
+  // 計算
+  function calcResultByCapture(capture: { cherry: number; bell: number; piero: number }) {
+    const g = numberOr(G, 0);
+    const B = numberOr(big, 0);
+    const R = numberOr(reg, 0);
+    const D = numberOr(diff, 0);
 
-function calcResultByCapture(capture: { cherry: number; bell: number; piero: number }) {
-  const g = numberOr(G, 0);
-  const B = numberOr(big, 0);
-  const R = numberOr(reg, 0);
-  const D = numberOr(diff, 0);
+    const coinIn = 3 * g - 3 * (g / replay);
+    const outBigReg = B * bigAvg + R * regAvg;
+    const outOthers =
+      (g / cherry) * cherryPay * capture.cherry +
+      (g / bell) * bellPay * capture.bell +
+      (g / piero) * pieroPay * capture.piero;
+    const outKnown = outBigReg + outOthers;
 
-  const coinIn = 3 * g - 3 * (g / replay);
-  const outBigReg = B * bigAvg + R * regAvg;
-  const outOthers =
-    (g / cherry) * cherryPay * capture.cherry +
-    (g / bell) * bellPay * capture.bell +
-    (g / piero) * pieroPay * capture.piero;
-  const outKnown = outBigReg + outOthers;
+    const grapesCountRaw = (D + coinIn - outKnown) / 8;
+    const grapesCount = Math.max(0, grapesCountRaw);
+    const grapeProb = grapesCount > 0 ? g / grapesCount : Infinity;
 
-  const grapesCountRaw = (D + coinIn - outKnown) / 8;
-  const grapesCount = Math.max(0, grapesCountRaw);
-  const grapeProb = grapesCount > 0 ? g / grapesCount : Infinity;
+    return { grapesCount, grapeProb };
+  }
 
-  return { grapesCount, grapeProb };
-}
+  const resultsByStrategy = useMemo(() => {
+    return STRATEGIES.map(s => ({
+      key: s.key,
+      label: s.label,
+      res: calcResultByCapture(s.capture),
+    }));
+  }, [G, big, reg, diff, replay, cherry, bell, piero, bigAvg, regAvg, cherryPay, bellPay, pieroPay]);
 
-const resultsByStrategy = useMemo(() => {
-  return STRATEGIES.map(s => ({
-    key: s.key,
-    label: s.label,
-    res: calcResultByCapture(s.capture),
-  }));
-}, [G, big, reg, diff, replay, cherry, bell, piero, bigAvg, regAvg, cherryPay, bellPay, pieroPay]);
-
+  // 履歴に追加（確率のみ）
+  function addHistory() {
+    const row: HistoryRow = {
+      ts: Date.now(),
+      model: modelKey,
+      probs: {
+        random:    formatProb(resultsByStrategy.find(r => r.key === "random")?.res.grapeProb ?? Infinity),
+        cherry90:  formatProb(resultsByStrategy.find(r => r.key === "cherry90")?.res.grapeProb ?? Infinity),
+        cherry100: formatProb(resultsByStrategy.find(r => r.key === "cherry100")?.res.grapeProb ?? Infinity),
+        full:      formatProb(resultsByStrategy.find(r => r.key === "full")?.res.grapeProb ?? Infinity),
+      },
+    };
+    setHistory(prev => [row, ...prev].slice(0, HISTORY_MAX));
+  }
 
   return (
-    <div className="min-h-screen w-full bg-neutral-50 text-neutral-900 p-4 md:p-8" onDragOver={e=>e.preventDefault()} onDrop={onDrop}>
+    <div
+      className="min-h-screen w-full bg-neutral-50 text-neutral-900 p-4 md:p-8"
+      onDragOver={e => e.preventDefault()}
+      onDrop={onDrop}
+    >
       <div className="max-w-3xl mx-auto space-y-8">
         <header className="flex items-center justify-between">
-          <h1
-    style={{ fontSize: "20px", lineHeight: 1.2, margin: 0, fontWeight: 700 }}
-  >
-    ジャグラーぶどう逆算
-  </h1>
+          <h1 style={{ fontSize: "20px", lineHeight: 1.2, margin: 0, fontWeight: 700 }}>
+            ジャグラーぶどう逆算
+          </h1>
           <div className="text-6px opacity-70"> 画像OCR対応※β版</div>
         </header>
 
-        {/* 機種プリセット */}
+        {/* 機種プリセット + ボタン */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
-          <label className="block text-3xl font-semibold">機種プリセット</label>
-          <select className="w-full rounded-xl border p-3 mb-8" value={modelKey as string} onChange={(e)=>loadPreset(e.target.value as keyof typeof PRESETS)}>
-            {Object.keys(PRESETS).map((k) => (<option key={k} value={k}>{k}</option>))}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <label className="block text-3xl font-semibold" style={{ margin: 0 }}>
+              機種プリセット
+            </label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={resetInputs}
+                style={{ padding: "8px 12px", border: "1px solid #333", borderRadius: 8 }}
+              >
+                リセット
+              </button>
+              <button
+                type="button"
+                onClick={addHistory}
+                style={{ padding: "8px 12px", border: "1px solid #333", borderRadius: 8 }}
+              >
+                履歴に追加
+              </button>
+            </div>
+          </div>
+
+          <select
+            className="w-full rounded-xl border p-3 mb-8"
+            value={modelKey as string}
+            onChange={(e) => loadPreset(e.target.value as keyof typeof PRESETS)}
+          >
+            {Object.keys(PRESETS).map((k) => (
+              <option key={k} value={k}>{k}</option>
+            ))}
           </select>
         </section>
 
-         {/* 出力（打法を横並び：確率＋回数） */}
-<section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
-  <div
-    style={{
-      display: "grid",
-      gridTemplateColumns: "repeat(4, 1fr)", // ★ 4等分固定（モバイルでも4列）
-      gap: 8,                                 // 余白を詰める
-      overflowX: "hidden",                    // 横スクロール禁止
-      width: "100%",
-    }}
-  >
-    {resultsByStrategy.map(({ key, label, res }) => (
-      <div
-        key={key}
-        style={{
-          border: "1px solid #e5e5e5",
-          borderRadius: 10,
-          padding: 8,                         // ★ 余白を縮小
-          textAlign: "center",
-          minWidth: 0,                        // ★ 収まりやすく
-        }}
-      >
-        {/* 打法名（小さめ） */}
-        <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 12 }}>
-          {label}
-        </div>
+        {/* 出力（打法を横並び：確率＋回数） */}
+        <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(4, 1fr)", // ★ 4等分固定（モバイルでも4列）
+              gap: 8,                                 // 余白を詰める
+              overflowX: "hidden",                    // 横スクロール禁止
+              width: "100%",
+            }}
+          >
+            {resultsByStrategy.map(({ key, label, res }) => (
+              <div
+                key={key}
+                style={{
+                  border: "1px solid #e5e5e5",
+                  borderRadius: 10,
+                  padding: 8,                         // ★ 余白を縮小
+                  textAlign: "center",
+                  minWidth: 0,                        // ★ 収まりやすく
+                }}
+              >
+                {/* 打法名（小さめ） */}
+                <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 12 }}>
+                  {label}
+                </div>
 
-        {/* 確率 */}
-        <div style={{ fontSize: 11, opacity: 0.7, lineHeight: 1 }}>確率</div>
-        <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.1, marginBottom: 4 }}>
-          {formatProb(res.grapeProb)}
-        </div>
+                {/* 確率 */}
+                <div style={{ fontSize: 11, opacity: 0.7, lineHeight: 1 }}>確率</div>
+                <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.1, marginBottom: 4 }}>
+                  {formatProb(res.grapeProb)}
+                </div>
 
-        {/* 回数 */}
-        <div style={{ fontSize: 11, opacity: 0.7, lineHeight: 1 }}>回数</div>
-        <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.1 }}>
-          {formatInt(res.grapesCount)}
-        </div>
-      </div>
-    ))}
-  </div>
-</section>
-
-
+                {/* 回数 */}
+                <div style={{ fontSize: 11, opacity: 0.7, lineHeight: 1 }}>回数</div>
+                <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.1 }}>
+                  {formatInt(res.grapesCount)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
 
         {/* 手入力（任意） */}
-<section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-4">
+        <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-4">
+          {/* 総回転数（1行） */}
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: "1 1 auto" }}>
+              <NumberField label="総回転数 G" value={G} setValue={setG} step={100} min={0} placeholder="例: 3200" compact />
+            </div>
+          </div>
 
-  {/* 総回転数（1行） */}
-  <div style={{ display: "flex", gap: 12 }}>
-    <div style={{ flex: "1 1 auto" }}>
-      <NumberField label="総回転数 G" value={G} setValue={setG} step={100} min={0} placeholder="例: 3200" compact />
-    </div>
-  </div>
+          {/* ★ BIG と REG を同一行に並べる（各50%） */}
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <BRField label="BIG回数" value={big} setValue={setBig} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <BRField label="REG回数" value={reg} setValue={setReg} />
+            </div>
+          </div>
 
- {/* ★ BIG と REG を同一行に並べる（各50%） */}
-<div style={{ display: "flex", gap: 8 }}>
-  <div style={{ flex: 1 }}>
-    <BRField label="BIG回数" value={big} setValue={setBig} />
-  </div>
-  <div style={{ flex: 1 }}>
-    <BRField label="REG回数" value={reg} setValue={setReg} />
-  </div>
-</div>
+          {/* 差枚（1行） */}
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: "1 1 auto" }}>
+              <DiffField label="差枚（±）" value={diff} setValue={setDiff} />
+            </div>
+          </div>
+        </section>
 
+        {/* OCR入力（下に配置） */}
+        <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
+          <p className="text-sm text-neutral-600">
+            カメラ撮影または画像（スクショ）を選択して数値を自動入力できます。
+          </p>
+          <div className="flex flex-col gap-3">
+            <div className="border-2 border-dashed rounded-2xl p-6 text-center">
+              <div className="mb-3">ここに画像をドロップ（PC）</div>
+              <div className="flex gap-2 justify-center">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg border hover:bg-neutral-50"
+                  onClick={() => cameraInputRef.current?.click()}
+                >
+                  📷 カメラで撮る
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg border hover:bg-neutral-50"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  🖼 画像を選ぶ
+                </button>
+              </div>
+              {/* 非表示 input */}
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={(e) => handleImageFiles(e.target.files)}
+              />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => handleImageFiles(e.target.files)}
+              />
+            </div>
+            {ocrBusy && <div className="text-sm">読み取り中…</div>}
+            {ocrLog && (
+              <pre className="bg-neutral-100 rounded-xl p-3 text-xs overflow-auto max-h-48 whitespace-pre-wrap">
+                {ocrLog}
+              </pre>
+            )}
+          </div>
+        </section>
 
-
-  {/* 差枚（1行） */}
-  <div style={{ display: "flex", gap: 12 }}>
-    <div style={{ flex: "1 1 auto" }}>
-      <DiffField label="差枚（±）" value={diff} setValue={setDiff} />
-    </div>
-  </div>
-</section>
-
-       
-
-        {/* OCR入力を下に移動 */}
-<section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
-  <p className="text-sm text-neutral-600">
-    カメラ撮影または画像（スクショ）を選択して数値を自動入力できます。
-  </p>
-  <div className="flex flex-col gap-3">
-    <div className="border-2 border-dashed rounded-2xl p-6 text-center">
-      <div className="mb-3">ここに画像をドロップ（PC）</div>
-      <div className="flex gap-2 justify-center">
-        <button
-          type="button"
-          className="px-3 py-2 rounded-lg border hover:bg-neutral-50"
-          onClick={() => cameraInputRef.current?.click()}
-        >
-          📷 カメラで撮る
-        </button>
-        <button
-          type="button"
-          className="px-3 py-2 rounded-lg border hover:bg-neutral-50"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          🖼 画像を選ぶ
-        </button>
-      </div>
-      <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden"
-             onChange={(e) => handleImageFiles(e.target.files)} />
-      <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
-             onChange={(e) => handleImageFiles(e.target.files)} />
-    </div>
-    {ocrBusy && <div className="text-sm">読み取り中…</div>}
-    {ocrLog && <pre className="bg-neutral-100 rounded-xl p-3 text-xs overflow-auto max-h-48 whitespace-pre-wrap">{ocrLog}</pre>}
-  </div>
-</section>
+        {/* 履歴（確率のみ・最大10行） — 前提の直前に表示 */}
+        <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
+          <h3 className="text-lg font-semibold">履歴（確率のみ）</h3>
+          {history.length === 0 ? (
+            <div className="text-sm opacity-70">まだ履歴がありません。「履歴に追加」で記録します。</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left p-2">機種名</th>
+                    <th className="text-right p-2">適当打</th>
+                    <th className="text-right p-2">C90%</th>
+                    <th className="text-right p-2">C100%</th>
+                    <th className="text-right p-2">完全攻略</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((h) => (
+                    <tr key={h.ts} className="border-b">
+                      <td className="p-2">{h.model}</td>
+                      <td className="p-2 text-right">{h.probs.random}</td>
+                      <td className="p-2 text-right">{h.probs.cherry90}</td>
+                      <td className="p-2 text-right">{h.probs.cherry100}</td>
+                      <td className="p-2 text-right">{h.probs.full}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
         {/* 前提の編集 */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-4">
@@ -373,7 +481,6 @@ const resultsByStrategy = useMemo(() => {
   );
 }
 
-
 // ===== BB / RB 専用：±1 / ±10 ボタン付き =====
 type BRFieldProps = {
   label: string;
@@ -385,35 +492,36 @@ function BRField({ label, value, setValue }: BRFieldProps) {
   const curr = Number.isFinite(Number(value)) ? Number(value) : 0;
 
   const apply = (d: number) => {
-    const next = Math.max(0, curr + d);       // 0未満にしない
+    const next = Math.max(0, curr + d); // 0未満にしない
     setValue(String(next));
   };
 
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value.replace(/[^\d]/g, "");
-    setValue(raw.slice(0, 4));                 // 最大4桁（十分）
+    setValue(raw.slice(0, 4)); // 最大4桁（十分）
   };
 
   const btnStyle: React.CSSProperties = {
-    flex: "1 1 0",
     padding: "8px 0",
     border: "1px solid #333",
     borderRadius: 6,
     textAlign: "center",
+    whiteSpace: "nowrap",
+    flex: "0 0 auto",
   };
   const inputStyle: React.CSSProperties = {
-    flex: "1 1 0",
-    width: "8ch",                              // 差枚と近い見た目に
+    width: "8ch", // 差枚と近い見た目に
     padding: "8px 0",
     border: "1px solid #333",
     borderRadius: 6,
     textAlign: "right",
+    flex: "0 0 auto",
   };
 
   return (
     <label style={{ display: "block" }}>
       <span style={{ display: "block", fontSize: 14, opacity: 0.7, marginBottom: 4 }}>{label}</span>
-      <div style={{ display: "flex", gap: 6 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "nowrap" }}>
         <button type="button" style={btnStyle} onClick={() => apply(-10)}>-10</button>
         <button type="button" style={btnStyle} onClick={() => apply(-1)}>-1</button>
         <input type="text" inputMode="numeric" value={value as any} onChange={onChange} style={inputStyle} />
@@ -423,7 +531,6 @@ function BRField({ label, value, setValue }: BRFieldProps) {
     </label>
   );
 }
-
 
 // ±ボタン付きの数値入力（汎用）
 function NumberField({
@@ -445,7 +552,7 @@ function NumberField({
   max?: number;
   placeholder?: string;
   allowNegative?: boolean;
-  compact?: boolean;   // ★ 追加
+  compact?: boolean; // ★ 追加
 }) {
   const current = isFinite(Number(value)) ? Number(value) : 0;
   const apply = (delta: number) => {
@@ -462,37 +569,36 @@ function NumberField({
     setValue(clipped);
   };
 
-
   // ★ コンパクトUIの寸法
   const btnPad = compact ? "6px 10px" : "12px 12px";
   const inputPad = compact ? "8px" : "12px";
   const inputWidth = compact ? "5ch" : undefined; // 5桁＋α
 
+  const btnStyle: React.CSSProperties = {
+    padding: btnPad,
+    borderRadius: 8,
+    border: "1px solid #333",
+    whiteSpace: "nowrap",
+    flex: "0 0 auto",
+  };
+
   return (
     <label style={{ display: "block" }}>
       <span style={{ display: "block", fontSize: 14, opacity: 0.7, marginBottom: 4 }}>{label}</span>
-      <div style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
-        <button
-          type="button"
-          style={{ padding: btnPad, borderRadius: 8, border: "1px solid #333" }}
-          onClick={() => apply(-step)}
-        >
+      <div style={{ display: "flex", alignItems: "stretch", gap: 8, flexWrap: "nowrap" }}>
+        <button type="button" style={btnStyle} onClick={() => apply(-step)}>
           −{step}
         </button>
         <input
           type="text"
           inputMode="numeric"
           pattern="\d*"
-          style={{ width: inputWidth, padding: inputPad, borderRadius: 8, border: "1px solid #333", textAlign: "right" }}
+          style={{ width: inputWidth, padding: inputPad, borderRadius: 8, border: "1px solid #333", textAlign: "right", flex: "0 0 auto" }}
           value={value as any}
           onChange={onChange}
           placeholder={placeholder}
         />
-        <button
-          type="button"
-          style={{ padding: btnPad, borderRadius: 8, border: "1px solid #333" }}
-          onClick={() => apply(step)}
-        >
+        <button type="button" style={btnStyle} onClick={() => apply(step)}>
           +{step}
         </button>
       </div>
@@ -513,8 +619,6 @@ function DiffField({
   const current = isFinite(Number(value)) ? Number(value) : 0;
   const apply = (delta: number) => setValue(String(Math.round(current + delta)));
 
-
-  
   // 先頭±許可＆6桁まで
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     let raw = e.target.value.replace(/[^\d+-]/g, "");
@@ -530,7 +634,7 @@ function DiffField({
     border: "1px solid #333",
     borderRadius: 8,
     whiteSpace: "nowrap",
-    flex: "0 0 auto",       // これでボタンが潰れず折り返しもしない
+    flex: "0 0 auto",
   };
   const inputStyle: React.CSSProperties = {
     width: "8ch",
@@ -582,8 +686,6 @@ function DiffField({
     </label>
   );
 }
-
-
 
 function formatInt(n: number) {
   if (!isFinite(n)) return "-";
@@ -641,9 +743,10 @@ function parseFromText(raw: string) {
   ];
   for (const r of diffPatterns) {
     const m = text.match(r);
-    if (m) { diff = parseInt(m[3] || m[1], 10); break; }
+    if (m) { diff = parseInt((m[3] || m[1]) as string, 10); break; }
   }
 
   if (G == null && big == null && reg == null && diff == null) return null;
   return { modelKey, G, big, reg, diff };
 }
+
