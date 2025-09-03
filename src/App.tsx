@@ -1,7 +1,9 @@
 import React, { useMemo, useState, useRef, useEffect } from "react";
 import Tesseract from "tesseract.js";
 
-// 機種プリセット（※数値：SアイムジャグラーEXをコピペしたものをベース）
+/* -----------------------
+   機種プリセット
+----------------------- */
 const PRESETS = {
   "マイジャグラーV": {
     replay: 7.298, cherry: 36, bell: 1024, piero: 1024,
@@ -29,83 +31,128 @@ const PRESETS = {
   },
 } as const;
 
-// === 永続化（保存するのは G / BIG / REG / 差枚 / 機種プリセット / 履歴 ） ===
+/* -----------------------
+   永続化（入力と履歴）
+----------------------- */
 const STORAGE_KEY = "jug-ocr-v1.2:state";
+const HISTORY_KEY = "jug-ocr-v1.2:history";
+const HISTORY_MAX = 10;
 
-function loadSaved() {
+type SavedState = {
+  modelKey?: keyof typeof PRESETS;
+  G?: string | number;
+  big?: string | number;
+  reg?: string | number;
+  diff?: string | number;
+};
+
+type HistoryRow = {
+  modelKey: string;
+  probRandom: string; // 適当打ち
+  probC90: string;    // チェリー狙い(90%)
+  probC100: string;   // チェリー狙い(100%)
+  probFull: string;   // 完全攻略
+};
+
+function loadSaved(): SavedState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    const obj = raw ? JSON.parse(raw) : {};
-    return { ...obj, history: obj.history ?? [] };
+    return raw ? JSON.parse(raw) : {};
   } catch {
-    return { history: [] };
+    return {};
   }
 }
-
-function saveState(partial: any) {
+function saveState(partial: Partial<SavedState>) {
   try {
     const cur = loadSaved();
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...cur, ...partial }));
-  } catch {
-    // 何もしない（プライベートモード等で失敗した場合）
-  }
+  } catch {}
 }
 
-// 履歴1件の型
-type HistoryRow = {
-  ts: number; // 追加時刻（今は表示しないが保存しておく）
-  model: string;
-  probs: {
-    random: string;
-    cherry90: string;
-    cherry100: string;
-    full: string;
-  };
-};
+function loadHistory(): HistoryRow[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? (JSON.parse(raw) as HistoryRow[]) : [];
+  } catch {
+    return [];
+  }
+}
+function saveHistory(rows: HistoryRow[]) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(rows.slice(0, HISTORY_MAX)));
+  } catch {}
+}
 
-const HISTORY_MAX = 10;
-
-// 打法ごとの小役取得率（必要なら後で調整可能）
+/* -----------------------
+   打法ごとの取得率
+----------------------- */
 const STRATEGIES = [
-  { key: "random",    label: "適当打ち",           capture: { cherry: 0.667, bell: 0.1,  piero: 0.05 } },
-  { key: "cherry90",  label: "チェリー狙い(90%)",  capture: { cherry: 0.90,  bell: 0.05, piero: 0.01 } },
-  { key: "cherry100", label: "チェリー狙い(100%)", capture: { cherry: 1.00,  bell: 0,    piero: 0    } },
-  { key: "full",      label: "完全攻略",           capture: { cherry: 1.00,  bell: 1.00, piero: 1.00 } },
+  { key: "random",   label: "適当打ち",         capture: { cherry: 0.667, bell: 0.1,  piero: 0.05 } },
+  { key: "cherry90", label: "チェリー狙い(90%)", capture: { cherry: 0.90,  bell: 0.05, piero: 0.01 } },
+  { key: "cherry100",label: "チェリー狙い(100%)",capture: { cherry: 1.00,  bell: 0.00, piero: 0.00 } },
+  { key: "full",     label: "完全攻略",         capture: { cherry: 1.00,  bell: 1.00, piero: 1.00 } },
 ] as const;
 
-// 文字列→数値（カンマOK）
+/* -----------------------
+   共通ユーティリティ
+----------------------- */
 function numberOr(val: any, fallback: number) {
   const n = typeof val === "number" ? val : parseFloat(String(val ?? "").replace(/,/g, ""));
   return isFinite(n) ? n : fallback;
 }
+function formatInt(n: number) {
+  if (!isFinite(n)) return "-";
+  return Math.round(n).toLocaleString();
+}
+function formatProb(x: number) {
+  if (!isFinite(x) || x <= 0) return "-";
+  return `1/${x.toFixed(2)}`;
+}
 
+/* -----------------------
+   入力UIの共通寸法（高さ揃え）
+----------------------- */
+const CTRL_H = 40;
+const PAD_X = 12;
+
+const baseButton: React.CSSProperties = {
+  height: CTRL_H,
+  padding: `0 ${PAD_X}px`,
+  border: "1px solid #333",
+  borderRadius: 8,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  lineHeight: 1,
+  boxSizing: "border-box",
+};
+
+const baseInput: React.CSSProperties = {
+  height: CTRL_H,
+  padding: `0 ${PAD_X}px`,
+  border: "1px solid #333",
+  borderRadius: 8,
+  textAlign: "right",
+  lineHeight: 1,
+  boxSizing: "border-box",
+};
+
+/* =========================================================
+   App 本体
+========================================================= */
 export default function App() {
-  // ★ 機種プリセットを復元（未保存なら マイジャグラーV）
+  // プリセット
   const [modelKey, setModelKey] = useState<keyof typeof PRESETS>(() => {
     const s = loadSaved();
     return (s.modelKey as keyof typeof PRESETS) ?? "マイジャグラーV";
   });
+  const p = PRESETS[modelKey];
 
-  const [presets] = useState(PRESETS);
-  const p = presets[modelKey];
-
-  // ★ 入力欄を復元（未保存ならブランク）
-  const [G, setG] = useState<string | number>(() => {
-    const s = loadSaved();
-    return s.G ?? "";
-  });
-  const [big, setBig] = useState<string | number>(() => {
-    const s = loadSaved();
-    return s.big ?? "";
-  });
-  const [reg, setReg] = useState<string | number>(() => {
-    const s = loadSaved();
-    return s.reg ?? "";
-  });
-  const [diff, setDiff] = useState<string | number>(() => {
-    const s = loadSaved();
-    return s.diff ?? "";
-  });
+  // 入力（初期はブランク）
+  const [G, setG]     = useState<string | number>(() => loadSaved().G   ?? "");
+  const [big, setBig] = useState<string | number>(() => loadSaved().big ?? "");
+  const [reg, setReg] = useState<string | number>(() => loadSaved().reg ?? "");
+  const [diff, setDiff] = useState<string | number>(() => loadSaved().diff ?? "");
 
   // 前提（編集可）
   const [replay, setReplay] = useState<number>(p.replay);
@@ -118,26 +165,19 @@ export default function App() {
   const [bellPay, setBellPay] = useState<number>(p.bellPay);
   const [pieroPay, setPieroPay] = useState<number>(p.pieroPay);
 
-  // OCR 状態
+  // OCR
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrLog, setOcrLog] = useState("");
 
-  // 履歴（localStorage から復元）
-  const [history, setHistory] = useState<HistoryRow[]>(() => {
-    const s = loadSaved();
-    return Array.isArray(s.history) ? s.history : [];
-  });
+  // 履歴
+  const [history, setHistory] = useState<HistoryRow[]>(() => loadHistory());
 
-  // 入力・機種・履歴の永続化
+  // 入力・プリセットの保存
   useEffect(() => {
     saveState({ modelKey, G, big, reg, diff });
   }, [modelKey, G, big, reg, diff]);
 
-  useEffect(() => {
-    saveState({ history });
-  }, [history]);
-
-  // カメラ/ファイル選択のための refs
+  // 参照
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -145,8 +185,6 @@ export default function App() {
   function loadPreset(key: keyof typeof PRESETS) {
     setModelKey(key);
     const np = PRESETS[key];
-
-    // 前提値を更新
     setReplay(np.replay);
     setCherry(np.cherry);
     setBell(np.bell);
@@ -156,59 +194,22 @@ export default function App() {
     setCherryPay(np.cherryPay);
     setBellPay(np.bellPay);
     setPieroPay(np.pieroPay);
-
-    // ★ 入力フォームをクリア
+    // 入力はクリア
     setG("");
     setBig("");
     setReg("");
     setDiff("");
   }
 
-  // 入力だけリセット（履歴は残す）
-  function resetInputs() {
+  // リセット（入力だけクリア）
+  function handleReset() {
     setG("");
     setBig("");
     setReg("");
     setDiff("");
   }
 
-  // 画像 → OCR → 自動入力
-  async function handleImageFiles(files: FileList | null) {
-    if (!files || files.length === 0) return;
-    setOcrBusy(true); setOcrLog("");
-    try {
-      const file = files[0];
-      setOcrLog(s => s + `読み取り開始: ${file.name}\n`);
-      const { data } = await Tesseract.recognize(file, "jpn+eng", {
-        logger: m => { if (m.status) setOcrLog(s => s + `${m.status} ${Math.round((m.progress ?? 0) * 100)}%\n`); }
-      });
-      const text = (data.text || "").trim();
-      setOcrLog(s => s + "\n--- 抽出テキスト ---\n" + text + "\n-------------------\n");
-
-      const parsed = parseFromText(text);
-      if (parsed) {
-        if (parsed.modelKey && PRESETS[parsed.modelKey as keyof typeof PRESETS]) loadPreset(parsed.modelKey as keyof typeof PRESETS);
-        if (parsed.G != null) setG(parsed.G);
-        if (parsed.big != null) setBig(parsed.big);
-        if (parsed.reg != null) setReg(parsed.reg);
-        if (parsed.diff != null) setDiff(parsed.diff);
-        setOcrLog(s => s + "\n✅ 数値を反映しました。\n");
-      } else {
-        setOcrLog(s => s + "\n⚠️ 必要項目を特定できませんでした。数値を大きく写したスクショでお試しください。\n");
-      }
-    } catch (e: any) {
-      setOcrLog(s => s + `\n❌ OCRエラー: ${e?.message || e}\n`);
-    } finally {
-      setOcrBusy(false);
-    }
-  }
-
-  function onDrop(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    handleImageFiles(e.dataTransfer.files);
-  }
-
-  // 計算
+  // 計算コア
   function calcResultByCapture(capture: { cherry: number; bell: number; piero: number }) {
     const g = numberOr(G, 0);
     const B = numberOr(big, 0);
@@ -219,7 +220,7 @@ export default function App() {
     const outBigReg = B * bigAvg + R * regAvg;
     const outOthers =
       (g / cherry) * cherryPay * capture.cherry +
-      (g / bell) * bellPay * capture.bell +
+      (g / bell) * bellPay   * capture.bell   +
       (g / piero) * pieroPay * capture.piero;
     const outKnown = outBigReg + outOthers;
 
@@ -238,78 +239,115 @@ export default function App() {
     }));
   }, [G, big, reg, diff, replay, cherry, bell, piero, bigAvg, regAvg, cherryPay, bellPay, pieroPay]);
 
-  // 履歴に追加（確率のみ）
-  function addHistory() {
+  // 履歴に追加
+  function handleAddHistory() {
+    const lookup = Object.fromEntries(
+      resultsByStrategy.map(r => [r.key, r.res.grapeProb] as const)
+    );
     const row: HistoryRow = {
-      ts: Date.now(),
-      model: modelKey,
-      probs: {
-        random:    formatProb(resultsByStrategy.find(r => r.key === "random")?.res.grapeProb ?? Infinity),
-        cherry90:  formatProb(resultsByStrategy.find(r => r.key === "cherry90")?.res.grapeProb ?? Infinity),
-        cherry100: formatProb(resultsByStrategy.find(r => r.key === "cherry100")?.res.grapeProb ?? Infinity),
-        full:      formatProb(resultsByStrategy.find(r => r.key === "full")?.res.grapeProb ?? Infinity),
-      },
+      modelKey: modelKey as string,
+      probRandom: formatProb(lookup["random"] ?? Infinity),
+      probC90:    formatProb(lookup["cherry90"] ?? Infinity),
+      probC100:   formatProb(lookup["cherry100"] ?? Infinity),
+      probFull:   formatProb(lookup["full"] ?? Infinity),
     };
-    setHistory(prev => [row, ...prev].slice(0, HISTORY_MAX));
+    const next = [row, ...history].slice(0, HISTORY_MAX);
+    setHistory(next);
+    saveHistory(next);
+  }
+
+  // 画像 → OCR → 自動入力
+  async function handleImageFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setOcrBusy(true); setOcrLog("");
+    try {
+      const file = files[0];
+      setOcrLog(s => s + `読み取り開始: ${file.name}\n`);
+      const { data } = await Tesseract.recognize(file, "jpn+eng", {
+        logger: m => { if (m.status) setOcrLog(s => s + `${m.status} ${Math.round((m.progress ?? 0)*100)}%\n`); }
+      });
+      const text = (data.text || "").trim();
+      setOcrLog(s => s + "\n--- 抽出テキスト ---\n" + text + "\n-------------------\n");
+
+      const parsed = parseFromText(text);
+      if (parsed) {
+        if (parsed.modelKey && PRESETS[parsed.modelKey as keyof typeof PRESETS]) {
+          loadPreset(parsed.modelKey as keyof typeof PRESETS);
+        }
+        if (parsed.G   != null) setG(parsed.G);
+        if (parsed.big != null) setBig(parsed.big);
+        if (parsed.reg != null) setReg(parsed.reg);
+        if (parsed.diff!= null) setDiff(parsed.diff);
+        setOcrLog(s => s + "\n✅ 数値を反映しました。\n");
+      } else {
+        setOcrLog(s => s + "\n⚠️ 必要項目を特定できませんでした。数値を大きく写したスクショでお試しください。\n");
+      }
+    } catch (e: any) {
+      setOcrLog(s => s + `\n❌ OCRエラー: ${e?.message || e}\n`);
+    } finally {
+      setOcrBusy(false);
+    }
+  }
+  function onDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    handleImageFiles(e.dataTransfer.files);
   }
 
   return (
     <div
       className="min-h-screen w-full bg-neutral-50 text-neutral-900 p-4 md:p-8"
-      onDragOver={e => e.preventDefault()}
+      onDragOver={(e)=>e.preventDefault()}
       onDrop={onDrop}
     >
       <div className="max-w-3xl mx-auto space-y-8">
+        {/* タイトル */}
         <header className="flex items-center justify-between">
           <h1 style={{ fontSize: "20px", lineHeight: 1.2, margin: 0, fontWeight: 700 }}>
             ジャグラーぶどう逆算
           </h1>
-          <div className="text-6px opacity-70"> 画像OCR対応※β版</div>
+          <div className="text-6px opacity-70">画像OCR対応※β版</div>
         </header>
 
-        {/* 機種プリセット + ボタン */}
-        <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <label className="block text-3xl font-semibold" style={{ margin: 0 }}>
-              機種プリセット
-            </label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                type="button"
-                onClick={resetInputs}
-                style={{ padding: "8px 12px", border: "1px solid #333", borderRadius: 8 }}
-              >
-                リセット
-              </button>
-              <button
-                type="button"
-                onClick={addHistory}
-                style={{ padding: "8px 12px", border: "1px solid #333", borderRadius: 8 }}
-              >
-                履歴に追加
-              </button>
-            </div>
-          </div>
+        {/* セレクト + リセット + 履歴に追加（横並び） */}
+        <section className="bg-white rounded-2xl shadow p-4 md:p-6">
+          <div className="flex items-center gap-3 flex-nowrap whitespace-nowrap overflow-x-auto">
+            <select
+              aria-label="機種プリセット"
+              className="h-10 px-3 rounded-xl border shrink-0"
+              value={modelKey as string}
+              onChange={(e) => loadPreset(e.target.value as keyof typeof PRESETS)}
+            >
+              {Object.keys(PRESETS).map((k) => (
+                <option key={k} value={k}>{k}</option>
+              ))}
+            </select>
 
-          <select
-            className="w-full rounded-xl border p-3 mb-8"
-            value={modelKey as string}
-            onChange={(e) => loadPreset(e.target.value as keyof typeof PRESETS)}
-          >
-            {Object.keys(PRESETS).map((k) => (
-              <option key={k} value={k}>{k}</option>
-            ))}
-          </select>
+            <button
+              type="button"
+              className="h-10 px-4 rounded-lg border shrink-0 hover:bg-neutral-50"
+              onClick={handleReset}
+            >
+              リセット
+            </button>
+
+            <button
+              type="button"
+              className="h-10 px-4 rounded-lg border shrink-0 hover:bg-neutral-50"
+              onClick={handleAddHistory}
+            >
+              履歴に追加
+            </button>
+          </div>
         </section>
 
-        {/* 出力（打法を横並び：確率＋回数） */}
+        {/* 出力：打法4枚を横一列（常に4列） */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(4, 1fr)", // ★ 4等分固定（モバイルでも4列）
-              gap: 8,                                 // 余白を詰める
-              overflowX: "hidden",                    // 横スクロール禁止
+              gridTemplateColumns: "repeat(4, 1fr)",
+              gap: 8,
+              overflowX: "hidden",
               width: "100%",
             }}
           >
@@ -319,23 +357,16 @@ export default function App() {
                 style={{
                   border: "1px solid #e5e5e5",
                   borderRadius: 10,
-                  padding: 8,                         // ★ 余白を縮小
+                  padding: 8,
                   textAlign: "center",
-                  minWidth: 0,                        // ★ 収まりやすく
+                  minWidth: 0,
                 }}
               >
-                {/* 打法名（小さめ） */}
-                <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 12 }}>
-                  {label}
-                </div>
-
-                {/* 確率 */}
+                <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 12 }}>{label}</div>
                 <div style={{ fontSize: 11, opacity: 0.7, lineHeight: 1 }}>確率</div>
                 <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.1, marginBottom: 4 }}>
                   {formatProb(res.grapeProb)}
                 </div>
-
-                {/* 回数 */}
                 <div style={{ fontSize: 11, opacity: 0.7, lineHeight: 1 }}>回数</div>
                 <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.1 }}>
                   {formatInt(res.grapesCount)}
@@ -345,16 +376,27 @@ export default function App() {
           </div>
         </section>
 
-        {/* 手入力（任意） */}
+        {/* 手入力 */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-4">
           {/* 総回転数（1行） */}
           <div style={{ display: "flex", gap: 12 }}>
             <div style={{ flex: "1 1 auto" }}>
-              <NumberField label="総回転数 G" value={G} setValue={setG} step={100} min={0} placeholder="例: 3200" compact />
+              <NumberField
+                label="総回転数 G"
+                value={G}
+                setValue={setG}
+                step={100}
+                min={0}
+                compact
+                inputWidthCh={10}
+                // 左に−1000、右に＋1000
+                extraLeft={[{ label: "−1000", delta: -1000 }]}
+                extraRight={[{ label: "+1000", delta: 1000 }]}
+              />
             </div>
           </div>
 
-          {/* ★ BIG と REG を同一行に並べる（各50%） */}
+          {/* BIG/REG 横並び */}
           <div style={{ display: "flex", gap: 8 }}>
             <div style={{ flex: 1 }}>
               <BRField label="BIG回数" value={big} setValue={setBig} />
@@ -364,15 +406,52 @@ export default function App() {
             </div>
           </div>
 
-          {/* 差枚（1行） */}
+          {/* 差枚 */}
           <div style={{ display: "flex", gap: 12 }}>
             <div style={{ flex: "1 1 auto" }}>
               <DiffField label="差枚（±）" value={diff} setValue={setDiff} />
+              
             </div>
           </div>
         </section>
 
-        {/* OCR入力（下に配置） */}
+        {/* 履歴（表） */}
+        <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
+          <h2 className="text-base font-semibold">履歴</h2>
+          <div className="overflow-x-auto">
+            <table className="min-w-full border-collapse">
+              <thead>
+                <tr className="bg-neutral-50 text-sm">
+                  <th className="text-left  p-2">機種名</th>
+                  <th className="text-right p-2">適当打</th>
+                  <th className="text-right p-2">C90%</th>
+                  <th className="text-right p-2">C100%</th>
+                  <th className="text-right p-2">完全攻略</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((h, i) => (
+                  <tr key={i} className="border-b last:border-0">
+                    <td className="p-2">{h.modelKey}</td>
+                    <td className="text-right p-2 font-mono whitespace-nowrap tabular-nums">{h.probRandom}</td>
+                    <td className="text-right p-2 font-mono whitespace-nowrap tabular-nums">{h.probC90}</td>
+                    <td className="text-right p-2 font-mono whitespace-nowrap tabular-nums">{h.probC100}</td>
+                    <td className="text-right p-2 font-mono whitespace-nowrap tabular-nums">{h.probFull}</td>
+                  </tr>
+                ))}
+                {history.length === 0 && (
+                  <tr>
+                    <td className="p-3 text-sm text-neutral-500" colSpan={5}>
+                      まだ履歴がありません。「履歴に追加」を押すとここに溜まります（最大{HISTORY_MAX}件）。
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* OCR */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
           <p className="text-sm text-neutral-600">
             カメラ撮影または画像（スクショ）を選択して数値を自動入力できます。
@@ -396,7 +475,6 @@ export default function App() {
                   🖼 画像を選ぶ
                 </button>
               </div>
-              {/* 非表示 input */}
               <input
                 ref={cameraInputRef}
                 type="file"
@@ -422,40 +500,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* 履歴（確率のみ・最大10行） — 前提の直前に表示 */}
-        <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
-          <h3 className="text-lg font-semibold">履歴（確率のみ）</h3>
-          {history.length === 0 ? (
-            <div className="text-sm opacity-70">まだ履歴がありません。「履歴に追加」で記録します。</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left p-2">機種名</th>
-                    <th className="text-right p-2">適当打</th>
-                    <th className="text-right p-2">C90%</th>
-                    <th className="text-right p-2">C100%</th>
-                    <th className="text-right p-2">完全攻略</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {history.map((h) => (
-                    <tr key={h.ts} className="border-b">
-                      <td className="p-2">{h.model}</td>
-                      <td className="p-2 text-right">{h.probs.random}</td>
-                      <td className="p-2 text-right">{h.probs.cherry90}</td>
-                      <td className="p-2 text-right">{h.probs.cherry100}</td>
-                      <td className="p-2 text-right">{h.probs.full}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        {/* 前提の編集 */}
+        {/* 前提（編集） */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-4">
           <details open>
             <summary className="cursor-pointer text-lg font-semibold">前提（編集可）</summary>
@@ -481,47 +526,36 @@ export default function App() {
   );
 }
 
-// ===== BB / RB 専用：±1 / ±10 ボタン付き =====
+/* =========================================================
+   入力用コンポーネント
+========================================================= */
+
+// BB/RB 専用フィールド（±1/±10）
 type BRFieldProps = {
   label: string;
   value: string | number;
   setValue: (v: any) => void;
 };
-
 function BRField({ label, value, setValue }: BRFieldProps) {
   const curr = Number.isFinite(Number(value)) ? Number(value) : 0;
 
   const apply = (d: number) => {
-    const next = Math.max(0, curr + d); // 0未満にしない
+    const next = Math.max(0, curr + d);
     setValue(String(next));
   };
 
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value.replace(/[^\d]/g, "");
-    setValue(raw.slice(0, 4)); // 最大4桁（十分）
+    setValue(raw.slice(0, 4));
   };
 
-  const btnStyle: React.CSSProperties = {
-    padding: "8px 0",
-    border: "1px solid #333",
-    borderRadius: 6,
-    textAlign: "center",
-    whiteSpace: "nowrap",
-    flex: "0 0 auto",
-  };
-  const inputStyle: React.CSSProperties = {
-    width: "8ch", // 差枚と近い見た目に
-    padding: "8px 0",
-    border: "1px solid #333",
-    borderRadius: 6,
-    textAlign: "right",
-    flex: "0 0 auto",
-  };
+  const btnStyle = baseButton;
+  const inputStyle: React.CSSProperties = { ...baseInput, width: "8ch" };
 
   return (
     <label style={{ display: "block" }}>
       <span style={{ display: "block", fontSize: 14, opacity: 0.7, marginBottom: 4 }}>{label}</span>
-      <div style={{ display: "flex", gap: 6, flexWrap: "nowrap" }}>
+      <div style={{ display: "flex", gap: 6 }}>
         <button type="button" style={btnStyle} onClick={() => apply(-10)}>-10</button>
         <button type="button" style={btnStyle} onClick={() => apply(-1)}>-1</button>
         <input type="text" inputMode="numeric" value={value as any} onChange={onChange} style={inputStyle} />
@@ -543,6 +577,10 @@ function NumberField({
   placeholder,
   allowNegative = false,
   compact = false,
+  inputWidthCh,                // ★ 追加：入力幅（ch単位）
+  // 左右に任意ボタンを並べられる
+  extraLeft = [],
+  extraRight = [],
 }: {
   label: string;
   value: any;
@@ -552,9 +590,13 @@ function NumberField({
   max?: number;
   placeholder?: string;
   allowNegative?: boolean;
-  compact?: boolean; // ★ 追加
+  compact?: boolean;
+  inputWidthCh?: number;       // ★ 追加
+  extraLeft?: { label: string; delta: number }[];
+  extraRight?: { label: string; delta: number }[];
 }) {
   const current = isFinite(Number(value)) ? Number(value) : 0;
+
   const apply = (delta: number) => {
     let next = (isFinite(current) ? current : 0) + delta;
     if (!allowNegative && (min ?? 0) >= 0) next = Math.max(min ?? 0, next);
@@ -565,48 +607,57 @@ function NumberField({
 
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value.replace(/[^\d]/g, "");
-    const clipped = raw.slice(0, 5); // 最大5桁
+    const clipped = raw.slice(0, 6); // 最大6桁
     setValue(clipped);
   };
 
-  // ★ コンパクトUIの寸法
-  const btnPad = compact ? "6px 10px" : "12px 12px";
-  const inputPad = compact ? "8px" : "12px";
-  const inputWidth = compact ? "5ch" : undefined; // 5桁＋α
-
-  const btnStyle: React.CSSProperties = {
-    padding: btnPad,
-    borderRadius: 8,
-    border: "1px solid #333",
-    whiteSpace: "nowrap",
-    flex: "0 0 auto",
-  };
+  const widthStyle =
+    inputWidthCh ? `${inputWidthCh}ch` : (compact ? "5ch" : undefined);
+  const btnStyle: React.CSSProperties = { ...baseButton, fontSize: compact ? 12 : undefined };
 
   return (
     <label style={{ display: "block" }}>
-      <span style={{ display: "block", fontSize: 14, opacity: 0.7, marginBottom: 4 }}>{label}</span>
-      <div style={{ display: "flex", alignItems: "stretch", gap: 8, flexWrap: "nowrap" }}>
+      <span style={{ display: "block", fontSize: 14, opacity: 0.7, marginBottom: 4 }}>
+        {label}
+      </span>
+      <div style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
+        {/* 左側 追加ボタン */}
+        {extraLeft.map((b, i) => (
+          <button key={`L${i}`} type="button" style={btnStyle} onClick={() => apply(b.delta)}>
+            {b.label}
+          </button>
+        ))}
+        {/* 既定の -step */}
         <button type="button" style={btnStyle} onClick={() => apply(-step)}>
           −{step}
         </button>
+
         <input
           type="text"
           inputMode="numeric"
-          pattern="\d*"
-          style={{ width: inputWidth, padding: inputPad, borderRadius: 8, border: "1px solid #333", textAlign: "right", flex: "0 0 auto" }}
+          pattern="\\d*"
+          style={{ ...baseInput, width: widthStyle }}
           value={value as any}
           onChange={onChange}
           placeholder={placeholder}
         />
+
+        {/* 既定の +step */}
         <button type="button" style={btnStyle} onClick={() => apply(step)}>
           +{step}
         </button>
+        {/* 右側 追加ボタン */}
+        {extraRight.map((b, i) => (
+          <button key={`R${i}`} type="button" style={btnStyle} onClick={() => apply(b.delta)}>
+            {b.label}
+          </button>
+        ))}
       </div>
     </label>
   );
 }
 
-// 差枚：±10 / ±50 / ±100 を1行に固定（モバイル対応）
+// 差枚：±50 / ±100 / ±1000（±10は削除済み）
 function DiffField({
   label,
   value,
@@ -627,29 +678,24 @@ function DiffField({
     setValue(sign + digits);
   };
 
-  // ★ コンパクト共通スタイル
   const btnStyle: React.CSSProperties = {
-    padding: "6px 8px",
+    ...baseButton,
     fontSize: 12,
-    border: "1px solid #333",
-    borderRadius: 8,
     whiteSpace: "nowrap",
     flex: "0 0 auto",
   };
   const inputStyle: React.CSSProperties = {
+    ...baseInput,
     width: "8ch",
-    padding: "8px",
-    border: "1px solid #333",
-    borderRadius: 8,
-    textAlign: "right",
     flex: "0 0 auto",
   };
 
+  // label を外側の div で表示（クリック領域のバグ回避）
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-sm opacity-70">{label}</span>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 12, opacity: 0.7 }}>{label}</span>
 
-      {/* ★ 折り返し禁止＆必要時のみ横スクロール */}
+      {/* 折り返し禁止＆必要時のみ横スクロール */}
       <div
         style={{
           display: "flex",
@@ -657,51 +703,43 @@ function DiffField({
           gap: 8,
           overflowX: "auto",
           WebkitOverflowScrolling: "touch",
+          alignItems: "center",
         }}
       >
         {/* 左側（マイナス） */}
         <div style={{ display: "flex", gap: 6, flex: "0 0 auto" }}>
+          <button type="button" style={btnStyle} onClick={() => apply(-1000)}>−1000</button>
           <button type="button" style={btnStyle} onClick={() => apply(-100)}>−100</button>
           <button type="button" style={btnStyle} onClick={() => apply(-50)}>−50</button>
-          <button type="button" style={btnStyle} onClick={() => apply(-10)}>−10</button>
         </div>
 
-        {/* 入力欄 */}
+        {/* 入力欄（プレースホルダ削除で“灰色の0”を消す） */}
         <input
           type="text"
           inputMode="numeric"
           value={value as any}
           onChange={onChange}
-          placeholder="0"
           style={inputStyle}
         />
 
         {/* 右側（プラス） */}
         <div style={{ display: "flex", gap: 6, flex: "0 0 auto" }}>
-          <button type="button" style={btnStyle} onClick={() => apply(+10)}>+10</button>
           <button type="button" style={btnStyle} onClick={() => apply(+50)}>+50</button>
           <button type="button" style={btnStyle} onClick={() => apply(+100)}>+100</button>
+          <button type="button" style={btnStyle} onClick={() => apply(+1000)}>+1000</button>
         </div>
       </div>
-    </label>
+    </div>
   );
 }
 
-function formatInt(n: number) {
-  if (!isFinite(n)) return "-";
-  return Math.round(n).toLocaleString();
-}
-
-function formatProb(x: number) {
-  if (!isFinite(x) || x <= 0) return "-";
-  return `1/${x.toFixed(2)}`;
-}
-
-// ========== OCRテキスト → 数値抽出（従来版：引き続き保持） ==========
+/* -----------------------
+   OCRテキスト → 数値抽出
+----------------------- */
 function parseFromText(raw: string) {
   if (!raw) return null;
   const text = raw
-    .replace(/[\uFF10-\uFF19]/g, d => String.fromCharCode(d.charCodeAt(0) - 0xFF10 + 0x30)) // 全角→半角
+    .replace(/[\uFF10-\uFF19]/g, d => String.fromCharCode(d.charCodeAt(0) - 0xFF10 + 0x30))
     .replace(/[ ,\t]+/g, " ")
     .replace(/,/g, "")
     .replace(/Ｇ/g, "G")
@@ -709,14 +747,12 @@ function parseFromText(raw: string) {
     .replace(/＋/g, "+")
     .toLowerCase();
 
-  // 機種名（本文にプリセット名が出たら採用）
   let modelKey: string | undefined;
   for (const key of Object.keys(PRESETS)) {
     const keyNorm = key.toLowerCase().replace(/\s/g, "");
     if (text.replace(/\s/g, "").includes(keyNorm)) { modelKey = key; break; }
   }
 
-  // 回転数（G）
   let G: number | undefined;
   const gPatterns = [
     /(総?回転数|g数|回転数)\s*[:：]?\s*(\d{2,6})\s*g?/,
@@ -727,7 +763,6 @@ function parseFromText(raw: string) {
     if (m) { G = parseInt(m[2] || m[1], 10); break; }
   }
 
-  // BB / RB
   let big: number | undefined;
   let reg: number | undefined;
   const bbPatterns = [/(bb|big|ビッグ)\s*[:：]?\s*(\d{1,3})/];
@@ -735,7 +770,6 @@ function parseFromText(raw: string) {
   for (const r of bbPatterns) { const m = text.match(r); if (m) { big = parseInt(m[2], 10); break; } }
   for (const r of rbPatterns) { const m = text.match(r); if (m) { reg = parseInt(m[2], 10); break; } }
 
-  // 差枚
   let diff: number | undefined;
   const diffPatterns = [
     /(差枚(数)?|差玉|差枚数)\s*[:：]?\s*([+-]?\d{1,6})/,
@@ -743,10 +777,11 @@ function parseFromText(raw: string) {
   ];
   for (const r of diffPatterns) {
     const m = text.match(r);
-    if (m) { diff = parseInt((m[3] || m[1]) as string, 10); break; }
+    if (m) { diff = parseInt(m[3] || m[1], 10); break; }
   }
 
   if (G == null && big == null && reg == null && diff == null) return null;
   return { modelKey, G, big, reg, diff };
 }
+
 
