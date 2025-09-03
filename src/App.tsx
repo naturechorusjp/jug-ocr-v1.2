@@ -87,10 +87,10 @@ function saveHistory(rows: HistoryRow[]) {
    打法ごとの取得率
 ----------------------- */
 const STRATEGIES = [
-  { key: "random",   label: "適当打ち",           capture: { cherry: 0.667, bell: 0.1,  piero: 0.05 } },
-  { key: "cherry90", label: "チェリー狙い(90%)",   capture: { cherry: 0.90,  bell: 0.05, piero: 0.01 } },
-  { key: "cherry100",label: "チェリー狙い(100%)",  capture: { cherry: 1.00,  bell: 0.00, piero: 0.00 } },
-  { key: "full",     label: "完全攻略",           capture: { cherry: 1.00,  bell: 1.00, piero: 1.00 } },
+  { key: "random",   label: "適当打ち",         capture: { cherry: 0.667, bell: 0.1,  piero: 0.05 } },
+  { key: "cherry90", label: "チェリー狙い(90%)", capture: { cherry: 0.90,  bell: 0.05, piero: 0.01 } },
+  { key: "cherry100",label: "チェリー狙い(100%)",capture: { cherry: 1.00,  bell: 0.00, piero: 0.00 } },
+  { key: "full",     label: "完全攻略",         capture: { cherry: 1.00,  bell: 1.00, piero: 1.00 } },
 ] as const;
 
 /* -----------------------
@@ -109,36 +109,60 @@ function formatProb(x: number) {
   return `1/${x.toFixed(2)}`;
 }
 
+/* -----------------------
+   入力UIの共通寸法（高さ揃え）
+----------------------- */
+const CTRL_H = 40;
+const PAD_X = 12;
+
+const baseButton: React.CSSProperties = {
+  height: CTRL_H,
+  padding: `0 ${PAD_X}px`,
+  border: "1px solid #333",
+  borderRadius: 8,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  lineHeight: 1,
+  boxSizing: "border-box",
+};
+
+const baseInput: React.CSSProperties = {
+  height: CTRL_H,
+  padding: `0 ${PAD_X}px`,
+  border: "1px solid #333",
+  borderRadius: 8,
+  textAlign: "right",
+  lineHeight: 1,
+  boxSizing: "border-box",
+};
+
 /* =========================================================
    App 本体
 ========================================================= */
 export default function App() {
-  // まず保存値を読み、存在しない/空なら「マイジャグラーV」にフォールバック
-  const initialSaved = loadSaved();
-  const safeInitialModel =
-    initialSaved.modelKey && PRESETS[initialSaved.modelKey]
-      ? initialSaved.modelKey
-      : ("マイジャグラーV" as keyof typeof PRESETS);
-
   // プリセット
-  const [modelKey, setModelKey] = useState<keyof typeof PRESETS>(safeInitialModel);
+  const [modelKey, setModelKey] = useState<keyof typeof PRESETS>(() => {
+    const s = loadSaved();
+    return (s.modelKey as keyof typeof PRESETS) ?? "マイジャグラーV";
+  });
   const p = PRESETS[modelKey];
 
   // 入力（初期はブランク）
-  const [G,   setG]   = useState<string | number>(initialSaved.G   ?? "");
-  const [big, setBig] = useState<string | number>(initialSaved.big ?? "");
-  const [reg, setReg] = useState<string | number>(initialSaved.reg ?? "");
-  const [diff,setDiff]= useState<string | number>(initialSaved.diff?? "");
+  const [G, setG]     = useState<string | number>(() => loadSaved().G   ?? "");
+  const [big, setBig] = useState<string | number>(() => loadSaved().big ?? "");
+  const [reg, setReg] = useState<string | number>(() => loadSaved().reg ?? "");
+  const [diff, setDiff] = useState<string | number>(() => loadSaved().diff ?? "");
 
   // 前提（編集可）
-  const [replay,   setReplay]   = useState<number>(p.replay);
-  const [cherry,   setCherry]   = useState<number>(p.cherry);
-  const [bell,     setBell]     = useState<number>(p.bell);
-  const [piero,    setPiero]    = useState<number>(p.piero);
-  const [bigAvg,   setBigAvg]   = useState<number>(p.bigAvg);
-  const [regAvg,   setRegAvg]   = useState<number>(p.regAvg);
-  const [cherryPay,setCherryPay]= useState<number>(p.cherryPay);
-  const [bellPay,  setBellPay]  = useState<number>(p.bellPay);
+  const [replay, setReplay] = useState<number>(p.replay);
+  const [cherry, setCherry] = useState<number>(p.cherry);
+  const [bell, setBell] = useState<number>(p.bell);
+  const [piero, setPiero] = useState<number>(p.piero);
+  const [bigAvg, setBigAvg] = useState<number>(p.bigAvg);
+  const [regAvg, setRegAvg] = useState<number>(p.regAvg);
+  const [cherryPay, setCherryPay] = useState<number>(p.cherryPay);
+  const [bellPay, setBellPay] = useState<number>(p.bellPay);
   const [pieroPay, setPieroPay] = useState<number>(p.pieroPay);
 
   // OCR
@@ -150,9 +174,7 @@ export default function App() {
 
   // 入力・プリセットの保存
   useEffect(() => {
-    // modelKey が不正なら常にマイジャグへ矯正保存
-    const mk = PRESETS[modelKey] ? modelKey : ("マイジャグラーV" as keyof typeof PRESETS);
-    saveState({ modelKey: mk, G, big, reg, diff });
+    saveState({ modelKey, G, big, reg, diff });
   }, [modelKey, G, big, reg, diff]);
 
   // 参照
@@ -198,8 +220,8 @@ export default function App() {
     const outBigReg = B * bigAvg + R * regAvg;
     const outOthers =
       (g / cherry) * cherryPay * capture.cherry +
-      (g / bell)   * bellPay   * capture.bell   +
-      (g / piero)  * pieroPay  * capture.piero;
+      (g / bell) * bellPay   * capture.bell   +
+      (g / piero) * pieroPay * capture.piero;
     const outKnown = outBigReg + outOthers;
 
     const grapesCountRaw = (D + coinIn - outKnown) / 8;
@@ -318,13 +340,14 @@ export default function App() {
           </div>
         </section>
 
-        {/* 出力：打法4枚（スマホでも横幅にフィット、はみ出し無し） */}
+        {/* 出力：打法4枚を横一列（常に4列） */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(4, minmax(0, 1fr))", // 4分割、必ず親幅に収まる
-              gap: 6,
+              gridTemplateColumns: "repeat(4, 1fr)",
+              gap: 8,
+              overflowX: "hidden",
               width: "100%",
             }}
           >
@@ -336,53 +359,16 @@ export default function App() {
                   borderRadius: 10,
                   padding: 8,
                   textAlign: "center",
-                  minWidth: 0, // 子要素のはみ出しを抑える
+                  minWidth: 0,
                 }}
               >
-                {/* 打法名：小さめ＋折返しOK */}
-                <div
-                  style={{
-                    fontWeight: 700,
-                    marginBottom: 4,
-                    fontSize: "clamp(10px, 2.8vw, 12px)",
-                    lineHeight: 1.15,
-                    whiteSpace: "normal",
-                    wordBreak: "break-word",
-                  }}
-                >
-                  {label}
-                </div>
-
-                {/* 確率 */}
-                <div style={{ fontSize: "clamp(9px, 2.4vw, 11px)", opacity: 0.7, lineHeight: 1 }}>
-                  確率
-                </div>
-                <div
-                  style={{
-                    fontSize: "clamp(12px, 4vw, 16px)",
-                    fontWeight: 700,
-                    lineHeight: 1.1,
-                    marginBottom: 4,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
+                <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 12 }}>{label}</div>
+                <div style={{ fontSize: 11, opacity: 0.7, lineHeight: 1 }}>確率</div>
+                <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.1, marginBottom: 4 }}>
                   {formatProb(res.grapeProb)}
                 </div>
-
-                {/* 回数 */}
-                <div style={{ fontSize: "clamp(9px, 2.4vw, 11px)", opacity: 0.7, lineHeight: 1 }}>
-                  回数
-                </div>
-                <div
-                  style={{
-                    fontSize: "clamp(12px, 4vw, 16px)",
-                    fontWeight: 700,
-                    lineHeight: 1.1,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
+                <div style={{ fontSize: 11, opacity: 0.7, lineHeight: 1 }}>回数</div>
+                <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.1 }}>
                   {formatInt(res.grapesCount)}
                 </div>
               </div>
@@ -401,8 +387,9 @@ export default function App() {
                 setValue={setG}
                 step={100}
                 min={0}
-                placeholder="例: 3200"
                 compact
+                inputWidthCh={24}            {/* ← 幅を拡大 */}
+                // 左に−1000、右に＋1000
                 extraLeft={[{ label: "−1000", delta: -1000 }]}
                 extraRight={[{ label: "+1000", delta: 1000 }]}
               />
@@ -539,7 +526,7 @@ export default function App() {
 }
 
 /* =========================================================
-   入力用コンポーネント（高さ統一）
+   入力用コンポーネント
 ========================================================= */
 
 // BB/RB 専用フィールド（±1/±10）
@@ -561,21 +548,8 @@ function BRField({ label, value, setValue }: BRFieldProps) {
     setValue(raw.slice(0, 4));
   };
 
-  const btnStyle: React.CSSProperties = {
-    flex: "1 1 0",
-    padding: "8px 10px",           // ← 統一
-    border: "1px solid #333",
-    borderRadius: 8,               // ← 統一
-    textAlign: "center",
-  };
-  const inputStyle: React.CSSProperties = {
-    flex: "1 1 0",
-    width: "8ch",
-    padding: "8px 10px",           // ← 統一
-    border: "1px solid #333",
-    borderRadius: 8,               // ← 統一
-    textAlign: "right",
-  };
+  const btnStyle = baseButton;
+  const inputStyle: React.CSSProperties = { ...baseInput, width: "8ch" };
 
   return (
     <label style={{ display: "block" }}>
@@ -602,6 +576,8 @@ function NumberField({
   placeholder,
   allowNegative = false,
   compact = false,
+  inputWidthCh,                // ★ 追加：入力幅（ch単位）
+  // 左右に任意ボタンを並べられる
   extraLeft = [],
   extraRight = [],
 }: {
@@ -614,6 +590,7 @@ function NumberField({
   placeholder?: string;
   allowNegative?: boolean;
   compact?: boolean;
+  inputWidthCh?: number;       // ★ 追加
   extraLeft?: { label: string; delta: number }[];
   extraRight?: { label: string; delta: number }[];
 }) {
@@ -629,19 +606,13 @@ function NumberField({
 
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value.replace(/[^\d]/g, "");
-    const clipped = raw.slice(0, 5);
+    const clipped = raw.slice(0, 6); // 最大6桁
     setValue(clipped);
   };
 
-  const btnPad = compact ? "8px 10px" : "12px 12px";
-  const inputPad = compact ? "8px 10px" : "12px 12px";
-  const inputWidth = compact ? "5ch" : undefined;
-  const btnStyle: React.CSSProperties = {
-    padding: btnPad,
-    borderRadius: 8,
-    border: "1px solid #333",
-    ...(compact ? { fontSize: 12 } : null),
-  };
+  const widthStyle =
+    inputWidthCh ? `${inputWidthCh}ch` : (compact ? "5ch" : undefined);
+  const btnStyle: React.CSSProperties = { ...baseButton, fontSize: compact ? 12 : undefined };
 
   return (
     <label style={{ display: "block" }}>
@@ -649,12 +620,13 @@ function NumberField({
         {label}
       </span>
       <div style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
+        {/* 左側 追加ボタン */}
         {extraLeft.map((b, i) => (
           <button key={`L${i}`} type="button" style={btnStyle} onClick={() => apply(b.delta)}>
             {b.label}
           </button>
         ))}
-
+        {/* 既定の -step */}
         <button type="button" style={btnStyle} onClick={() => apply(-step)}>
           −{step}
         </button>
@@ -662,23 +634,18 @@ function NumberField({
         <input
           type="text"
           inputMode="numeric"
-          pattern="\d*"
-          style={{
-            width: inputWidth,
-            padding: inputPad,
-            borderRadius: 8,
-            border: "1px solid #333",
-            textAlign: "right",
-          }}
+          pattern="\\d*"
+          style={{ ...baseInput, width: widthStyle }}
           value={value as any}
           onChange={onChange}
           placeholder={placeholder}
         />
 
+        {/* 既定の +step */}
         <button type="button" style={btnStyle} onClick={() => apply(step)}>
           +{step}
         </button>
-
+        {/* 右側 追加ボタン */}
         {extraRight.map((b, i) => (
           <button key={`R${i}`} type="button" style={btnStyle} onClick={() => apply(b.delta)}>
             {b.label}
@@ -689,7 +656,7 @@ function NumberField({
   );
 }
 
-// 差枚：±50 / ±100 / ±1000（1行固定・高さ統一）
+// 差枚：±50 / ±100 / ±1000（±10は削除済み）
 function DiffField({
   label,
   value,
@@ -702,6 +669,7 @@ function DiffField({
   const current = isFinite(Number(value)) ? Number(value) : 0;
   const apply = (delta: number) => setValue(String(Math.round(current + delta)));
 
+  // 先頭±許可＆6桁まで
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     let raw = e.target.value.replace(/[^\d+-]/g, "");
     const sign = raw.startsWith("-") ? "-" : raw.startsWith("+") ? "+" : "";
@@ -710,26 +678,23 @@ function DiffField({
   };
 
   const btnStyle: React.CSSProperties = {
-    padding: "8px 10px",      // ← 統一
+    ...baseButton,
     fontSize: 12,
-    border: "1px solid #333",
-    borderRadius: 8,          // ← 統一
     whiteSpace: "nowrap",
     flex: "0 0 auto",
   };
   const inputStyle: React.CSSProperties = {
+    ...baseInput,
     width: "8ch",
-    padding: "8px 10px",      // ← 統一
-    border: "1px solid #333",
-    borderRadius: 8,          // ← 統一
-    textAlign: "right",
     flex: "0 0 auto",
   };
 
+  // label を外側の div で表示（クリック領域のバグ回避）
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <span style={{ fontSize: 12, opacity: 0.7 }}>{label}</span>
 
+      {/* 折り返し禁止＆必要時のみ横スクロール */}
       <div
         style={{
           display: "flex",
@@ -747,13 +712,12 @@ function DiffField({
           <button type="button" style={btnStyle} onClick={() => apply(-50)}>−50</button>
         </div>
 
-        {/* 入力欄 */}
+        {/* 入力欄（プレースホルダ削除で“灰色の0”を消す） */}
         <input
           type="text"
           inputMode="numeric"
           value={value as any}
           onChange={onChange}
-          placeholder="0"
           style={inputStyle}
         />
 
@@ -818,3 +782,4 @@ function parseFromText(raw: string) {
   if (G == null && big == null && reg == null && diff == null) return null;
   return { modelKey, G, big, reg, diff };
 }
+
