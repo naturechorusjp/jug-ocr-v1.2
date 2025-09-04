@@ -48,10 +48,10 @@ type SavedState = {
 
 type HistoryRow = {
   modelKey: string;
-  probRandom: string; // 適当打ち
-  probC90: string;    // チェリー狙い(90%)
-  probC100: string;   // チェリー狙い(100%)
-  probFull: string;   // 完全攻略
+  probRandom: string;
+  probC90: string;
+  probC100: string;
+  probFull: string;
 };
 
 function loadSaved(): SavedState {
@@ -68,7 +68,6 @@ function saveState(partial: Partial<SavedState>) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...cur, ...partial }));
   } catch {}
 }
-
 function loadHistory(): HistoryRow[] {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
@@ -110,7 +109,7 @@ function formatProb(x: number) {
 }
 
 /* -----------------------
-   入力UIの共通寸法（高さ揃え）
+   入力UIの共通寸法
 ----------------------- */
 const CTRL_H = 40;
 const PAD_X = 12;
@@ -141,23 +140,20 @@ const baseInput: React.CSSProperties = {
    App 本体
 ========================================================= */
 export default function App() {
-  // スマホ縮尺フィット
+  // スマホ縮尺フィットを固定
   useEffect(() => {
     const desired =
       "width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover";
-    const sel = 'meta[name="viewport"]';
-    let el = document.querySelector<HTMLMetaElement>(sel);
+    let el = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
     if (!el) {
       el = document.createElement("meta");
       el.name = "viewport";
       document.head.appendChild(el);
     }
     el.setAttribute("content", desired);
-
-    const styleId = "__lock_text_size_adjust__";
-    if (!document.getElementById(styleId)) {
+    if (!document.getElementById("__lock_text_size_adjust__")) {
       const st = document.createElement("style");
-      st.id = styleId;
+      st.id = "__lock_text_size_adjust__";
       st.textContent = `html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }`;
       document.head.appendChild(st);
     }
@@ -216,19 +212,12 @@ export default function App() {
     setCherryPay(np.cherryPay);
     setBellPay(np.bellPay);
     setPieroPay(np.pieroPay);
-    // 入力はクリア
-    setG("");
-    setBig("");
-    setReg("");
-    setDiff("");
+    setG(""); setBig(""); setReg(""); setDiff("");
   }
 
-  // リセット（入力だけクリア）
+  // リセット（入力だけ）
   function handleReset() {
-    setG("");
-    setBig("");
-    setReg("");
-    setDiff("");
+    setG(""); setBig(""); setReg(""); setDiff("");
   }
 
   // 計算コア
@@ -261,7 +250,7 @@ export default function App() {
     }));
   }, [G, big, reg, diff, replay, cherry, bell, piero, bigAvg, regAvg, cherryPay, bellPay, pieroPay]);
 
-  // 履歴に追加
+  // 履歴に追加/リセット
   function handleAddHistory() {
     const lookup = Object.fromEntries(
       resultsByStrategy.map(r => [r.key, r.res.grapeProb] as const)
@@ -276,6 +265,10 @@ export default function App() {
     const next = [row, ...history].slice(0, HISTORY_MAX);
     setHistory(next);
     saveHistory(next);
+  }
+  function handleResetHistory() {
+    setHistory([]);
+    saveHistory([]);
   }
 
   // 画像 → OCR → 自動入力
@@ -320,7 +313,7 @@ export default function App() {
       className="min-h-screen w-full bg-neutral-50 text-neutral-900 p-4 md:p-8"
       onDragOver={(e)=>e.preventDefault()}
       onDrop={onDrop}
-      style={{ maxWidth: "100vw", overflowX: "hidden" }}  // 横スクロール抑止
+      style={{ maxWidth: "100vw", overflowX: "hidden" }}
     >
       <div className="max-w-3xl mx-auto space-y-8">
         {/* タイトル */}
@@ -331,7 +324,7 @@ export default function App() {
           <div className="text-6px opacity-70">画像OCR対応※β版</div>
         </header>
 
-        {/* セレクト + リセット + 履歴に追加（横並び） */}
+        {/* セレクト + リセット + 履歴に追加 */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6">
           <div className="flex items-center gap-3 flex-nowrap whitespace-nowrap overflow-x-auto">
             <select
@@ -363,7 +356,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* 出力：打法4枚を横一列（常に4列） */}
+        {/* 出力：打法4枚 */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
           <div
             style={{
@@ -418,7 +411,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* BIG/REG 横並び（狭い幅では縦に折り返す） */}
+          {/* BIG/REG（各フィールドは横スクロールで重なり防止） */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <div style={{ flex: "1 1 300px", minWidth: 0 }}>
               <BRField label="BIG回数" value={big} setValue={setBig} />
@@ -436,9 +429,18 @@ export default function App() {
           </div>
         </section>
 
-        {/* 履歴（表） */}
+        {/* 履歴（表）＋リセット */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
-          <h2 className="text-base font-semibold">履歴</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold">履歴</h2>
+            <button
+              type="button"
+              className="px-3 h-9 rounded-lg border hover:bg-neutral-50"
+              onClick={handleResetHistory}
+            >
+              履歴をリセット
+            </button>
+          </div>
           <div className="overflow-x-auto">
             <table className="min-w-full border-collapse">
               <thead>
@@ -551,7 +553,7 @@ export default function App() {
    入力用コンポーネント
 ========================================================= */
 
-// BB/RB 専用フィールド（±1/±10）
+// BB/RB 専用フィールド（±1/±10）— 横スクロールで重なり防止
 type BRFieldProps = {
   label: string;
   value: string | number;
@@ -570,13 +572,22 @@ function BRField({ label, value, setValue }: BRFieldProps) {
     setValue(raw.slice(0, 4));
   };
 
-  const btnStyle = baseButton;
-  const inputStyle: React.CSSProperties = { ...baseInput, width: "8ch" };
+  const btnStyle: React.CSSProperties = { ...baseButton, flex: "0 0 auto" };
+  const inputStyle: React.CSSProperties = { ...baseInput, width: "8ch", flex: "0 0 auto" };
 
   return (
     <label style={{ display: "block" }}>
       <span style={{ display: "block", fontSize: 14, opacity: 0.7, marginBottom: 4 }}>{label}</span>
-      <div style={{ display: "flex", gap: 6 }}>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "nowrap",
+          gap: 6,
+          overflowX: "auto",
+          WebkitOverflowScrolling: "touch",
+          alignItems: "center",
+        }}
+      >
         <button type="button" style={btnStyle} onClick={() => apply(-10)}>-10</button>
         <button type="button" style={btnStyle} onClick={() => apply(-1)}>-1</button>
         <input type="text" inputMode="numeric" value={value as any} onChange={onChange} style={inputStyle} />
@@ -631,15 +642,12 @@ function NumberField({
     setValue(clipped);
   };
 
-  const widthStyle =
-    inputWidthCh ? `${inputWidthCh}ch` : (compact ? "5ch" : undefined);
+  const widthStyle = inputWidthCh ? `${inputWidthCh}ch` : (compact ? "5ch" : undefined);
   const btnStyle: React.CSSProperties = { ...baseButton, fontSize: compact ? 12 : undefined };
 
   return (
     <label style={{ display: "block" }}>
-      <span style={{ display: "block", fontSize: 14, opacity: 0.7, marginBottom: 4 }}>
-        {label}
-      </span>
+      <span style={{ display: "block", fontSize: 14, opacity: 0.7, marginBottom: 4 }}>{label}</span>
       <div style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
         {extraLeft.map((b, i) => (
           <button key={`L${i}`} type="button" style={btnStyle} onClick={() => apply(b.delta)}>
@@ -686,7 +694,6 @@ function DiffField({
   const current = isFinite(Number(value)) ? Number(value) : 0;
   const apply = (delta: number) => setValue(String(Math.round(current + delta)));
 
-  // 先頭±許可＆6桁まで
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     let raw = e.target.value.replace(/[^\d+-]/g, "");
     const sign = raw.startsWith("-") ? "-" : raw.startsWith("+") ? "+" : "";
@@ -709,6 +716,7 @@ function DiffField({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <span style={{ fontSize: 12, opacity: 0.7 }}>{label}</span>
+
       <div
         style={{
           display: "flex",
