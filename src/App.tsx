@@ -141,7 +141,7 @@ const baseInput: React.CSSProperties = {
    App 本体
 ========================================================= */
 export default function App() {
-  // ▼ 追加：viewport & text-size 調整を自動注入（初回表示時の縮尺を固定）
+  // スマホ縮尺フィット
   useEffect(() => {
     const desired =
       "width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover";
@@ -154,14 +154,11 @@ export default function App() {
     }
     el.setAttribute("content", desired);
 
-    // テキストの自動拡大を抑止（Android/ iOS）
     const styleId = "__lock_text_size_adjust__";
     if (!document.getElementById(styleId)) {
       const st = document.createElement("style");
       st.id = styleId;
-      st.textContent = `
-        html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-      `;
+      st.textContent = `html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }`;
       document.head.appendChild(st);
     }
   }, []);
@@ -415,19 +412,18 @@ export default function App() {
                 min={0}
                 compact
                 inputWidthCh={10}
-                // 左に−1000、右に＋1000
                 extraLeft={[{ label: "−1000", delta: -1000 }]}
                 extraRight={[{ label: "+1000", delta: 1000 }]}
               />
             </div>
           </div>
 
-          {/* BIG/REG 横並び */}
-          <div style={{ display: "flex", gap: 8 }}>
-            <div style={{ flex: 1 }}>
+          {/* BIG/REG 横並び（狭い幅では縦に折り返す） */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 300px", minWidth: 0 }}>
               <BRField label="BIG回数" value={big} setValue={setBig} />
             </div>
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: "1 1 300px", minWidth: 0 }}>
               <BRField label="REG回数" value={reg} setValue={setReg} />
             </div>
           </div>
@@ -525,9 +521,9 @@ export default function App() {
           </div>
         </section>
 
-        {/* 前提（編集） */}
+        {/* 前提（編集） → 初期は折りたたみ */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-4">
-          <details open>
+          <details>
             <summary className="cursor-pointer text-lg font-semibold">前提（編集可）</summary>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
               <NumberField label="リプレイ分母" value={replay} setValue={setReplay} />
@@ -602,8 +598,7 @@ function NumberField({
   placeholder,
   allowNegative = false,
   compact = false,
-  inputWidthCh,                // 入力幅（ch単位）
-  // 左右に任意ボタンを並べられる
+  inputWidthCh,
   extraLeft = [],
   extraRight = [],
 }: {
@@ -646,13 +641,11 @@ function NumberField({
         {label}
       </span>
       <div style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
-        {/* 左側 追加ボタン */}
         {extraLeft.map((b, i) => (
           <button key={`L${i}`} type="button" style={btnStyle} onClick={() => apply(b.delta)}>
             {b.label}
           </button>
         ))}
-        {/* 既定の -step */}
         <button type="button" style={btnStyle} onClick={() => apply(-step)}>
           −{step}
         </button>
@@ -667,11 +660,9 @@ function NumberField({
           placeholder={placeholder}
         />
 
-        {/* 既定の +step */}
         <button type="button" style={btnStyle} onClick={() => apply(step)}>
           +{step}
         </button>
-        {/* 右側 追加ボタン */}
         {extraRight.map((b, i) => (
           <button key={`R${i}`} type="button" style={btnStyle} onClick={() => apply(b.delta)}>
             {b.label}
@@ -682,7 +673,7 @@ function NumberField({
   );
 }
 
-// 差枚：±50 / ±100 / ±1000（±10は削除済み）
+// 差枚：±50 / ±100 / ±1000
 function DiffField({
   label,
   value,
@@ -715,12 +706,9 @@ function DiffField({
     flex: "0 0 auto",
   };
 
-  // label を外側の div で表示（クリック領域のバグ回避）
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <span style={{ fontSize: 12, opacity: 0.7 }}>{label}</span>
-
-      {/* 折り返し禁止＆必要時のみ横スクロール */}
       <div
         style={{
           display: "flex",
@@ -731,14 +719,12 @@ function DiffField({
           alignItems: "center",
         }}
       >
-        {/* 左側（マイナス） */}
         <div style={{ display: "flex", gap: 6, flex: "0 0 auto" }}>
           <button type="button" style={btnStyle} onClick={() => apply(-1000)}>−1000</button>
           <button type="button" style={btnStyle} onClick={() => apply(-100)}>−100</button>
           <button type="button" style={btnStyle} onClick={() => apply(-50)}>−50</button>
         </div>
 
-        {/* 入力欄 */}
         <input
           type="text"
           inputMode="numeric"
@@ -747,7 +733,6 @@ function DiffField({
           style={inputStyle}
         />
 
-        {/* 右側（プラス） */}
         <div style={{ display: "flex", gap: 6, flex: "0 0 auto" }}>
           <button type="button" style={btnStyle} onClick={() => apply(+50)}>+50</button>
           <button type="button" style={btnStyle} onClick={() => apply(+100)}>+100</button>
@@ -808,4 +793,3 @@ function parseFromText(raw: string) {
   if (G == null && big == null && reg == null && diff == null) return null;
   return { modelKey, G, big, reg, diff };
 }
-
