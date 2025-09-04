@@ -141,6 +141,31 @@ const baseInput: React.CSSProperties = {
    App 本体
 ========================================================= */
 export default function App() {
+  // ▼ 追加：viewport & text-size 調整を自動注入（初回表示時の縮尺を固定）
+  useEffect(() => {
+    const desired =
+      "width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover";
+    const sel = 'meta[name="viewport"]';
+    let el = document.querySelector<HTMLMetaElement>(sel);
+    if (!el) {
+      el = document.createElement("meta");
+      el.name = "viewport";
+      document.head.appendChild(el);
+    }
+    el.setAttribute("content", desired);
+
+    // テキストの自動拡大を抑止（Android/ iOS）
+    const styleId = "__lock_text_size_adjust__";
+    if (!document.getElementById(styleId)) {
+      const st = document.createElement("style");
+      st.id = styleId;
+      st.textContent = `
+        html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+      `;
+      document.head.appendChild(st);
+    }
+  }, []);
+
   // プリセット
   const [modelKey, setModelKey] = useState<keyof typeof PRESETS>(() => {
     const s = loadSaved();
@@ -298,6 +323,7 @@ export default function App() {
       className="min-h-screen w-full bg-neutral-50 text-neutral-900 p-4 md:p-8"
       onDragOver={(e)=>e.preventDefault()}
       onDrop={onDrop}
+      style={{ maxWidth: "100vw", overflowX: "hidden" }}  // 横スクロール抑止
     >
       <div className="max-w-3xl mx-auto space-y-8">
         {/* タイトル */}
@@ -576,7 +602,7 @@ function NumberField({
   placeholder,
   allowNegative = false,
   compact = false,
-  inputWidthCh,                // ★ 追加：入力幅（ch単位）
+  inputWidthCh,                // 入力幅（ch単位）
   // 左右に任意ボタンを並べられる
   extraLeft = [],
   extraRight = [],
@@ -590,7 +616,7 @@ function NumberField({
   placeholder?: string;
   allowNegative?: boolean;
   compact?: boolean;
-  inputWidthCh?: number;       // ★ 追加
+  inputWidthCh?: number;
   extraLeft?: { label: string; delta: number }[];
   extraRight?: { label: string; delta: number }[];
 }) {
@@ -712,7 +738,7 @@ function DiffField({
           <button type="button" style={btnStyle} onClick={() => apply(-50)}>−50</button>
         </div>
 
-        {/* 入力欄（プレースホルダ削除で“灰色の0”を消す） */}
+        {/* 入力欄 */}
         <input
           type="text"
           inputMode="numeric"
@@ -782,3 +808,4 @@ function parseFromText(raw: string) {
   if (G == null && big == null && reg == null && diff == null) return null;
   return { modelKey, G, big, reg, diff };
 }
+
