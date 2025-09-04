@@ -432,7 +432,7 @@ export default function App() {
         {/* 履歴（表）＋リセット */}
         <section className="bg-white rounded-2xl shadow p-4 md:p-6 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold">履歴</h2>
+            <h2 className="text-sm font-semibold">履歴</h2>
             <button
               type="button"
               className="px-3 h-9 rounded-lg border hover:bg-neutral-50"
